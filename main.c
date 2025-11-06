@@ -143,10 +143,10 @@ void readsegment(const char* buff, size_t from, size_t to, size_t len) {
 
 }
 
-int main() {
+int main(int argc, char *argv[]) {
     int processor_count = get_proc_count();
     printf("running with %d processors\n", processor_count);
-    int fd = open("large.txt", O_RDONLY);
+    int fd = open(argv[1], O_RDONLY);
     if (fd < 0) {
         perror("open");
         return 1;
