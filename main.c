@@ -4,6 +4,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -82,6 +83,21 @@ int get_proc_count() {
     return n;
 }
 
+float mystrtof(const char* buff, int length) {
+    int sign = buff[0] == '-';
+    int start = sign ? 1 : 0;
+    float mult = 0.1;
+    float res = 0;
+    for(int i = length - 2; i >= start; --i) {
+        char c = buff[i];
+        if(c == '.')
+            continue;
+        res += mult*(c - '0');
+        mult *= 10;
+    }
+    return sign ? -res : res;
+}
+
 void readsegment(const char* buff, size_t from, size_t to, size_t len) {
     while(from > -1 && buff[from--] != '\n') {} // rewind from to previous linefeed
     if(from < 5) {
@@ -90,8 +106,8 @@ void readsegment(const char* buff, size_t from, size_t to, size_t len) {
     while(to < len && buff[to++] != '\n') {} // push to to last linefeed or EOF
     to--;
 
-    unsigned char station_name[32] = {0};
-    unsigned char temp[16] = {0};
+    unsigned char station_name[16] = {0};
+    unsigned char temp[8] = {0};
 
     while(from < to) {
         int w_i = 0;
@@ -108,8 +124,9 @@ void readsegment(const char* buff, size_t from, size_t to, size_t len) {
         while(buff[from] != '\n') {
             temp[w_i++] = buff[from++];
         }
+        int tmp_length = w_i+1;
 
-        float temperature = strtof(temp, NULL);
+        float temperature = mystrtof(temp, tmp_length);
         // TODO: mutex
         Station_t* station = station_find(station_name);
         if(station == NULL) {
@@ -140,10 +157,12 @@ void readsegment(const char* buff, size_t from, size_t to, size_t len) {
         memset(station_name, 0, sizeof(station_name));
         memset(temp, 0, sizeof(temp));
     }
-
 }
 
 int main(int argc, char *argv[]) {
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+
     int processor_count = get_proc_count();
     printf("running with %d processors\n", processor_count);
     int fd = open(argv[1], O_RDONLY);
@@ -173,12 +192,17 @@ int main(int argc, char *argv[]) {
     for(int i = 0; i < processor_count; ++i) {
         size_t from = (size_t) (i * step);
         size_t to = from + step;
-        // TODO: pthread that
-        printf("SEGMENT %d\n", i);
         readsegment(buf, from, to, len);
     }
 
     munmap(buf, len);
     close(fd);
+
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+
+    double elapsed = (t1.tv_sec - t0.tv_sec) +
+                     (t1.tv_nsec - t0.tv_nsec) / 1e9;
+
+    printf("elapsed: %.6f s\n", elapsed);
     return 0;
 }
