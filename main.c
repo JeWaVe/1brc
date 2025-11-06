@@ -8,7 +8,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "./uthash.h"
+
+#define MAX_KEYS (1 << 20)
+#define MASK (MAX_KEYS - 1)
 
 typedef struct Station {
     char* name;
@@ -16,29 +18,11 @@ typedef struct Station {
     float max;
     float total;
     int count;
-    UT_hash_handle hh;
 } Station_t;
 
-static Station_t *stations = NULL;
-
-Station_t* station_find(const char *name)
-{
-    Station_t *s;
-    HASH_FIND_STR(stations, name, s);
-    return s;
-}
-
-Station_t* station_add(Station_t s)
-{
-    Station_t* clone = (Station_t*) malloc(sizeof(Station_t));
-    clone->name = strdup(s.name);
-    clone->min = s.min;
-    clone->max = s.max;
-    clone->total = s.total;
-    clone->count = s.count;
-
-    HASH_ADD_KEYPTR(hh, stations, clone->name, strlen(clone->name), clone);
-    return clone;
+void print_station(Station_t* s) {
+    printf("%s : \n", s->name);
+    printf("\t%d %f %f %f\n", s->count, s->min, s->max, s->total/(float)s->count);
 }
 
 // vibe coded this function
@@ -98,7 +82,7 @@ float mystrtof(const char* buff, int length) {
     return sign ? -res : res;
 }
 
-void readsegment(const char* buff, size_t from, size_t to, size_t len) {
+void readsegment(const char* buff, size_t from, size_t to, size_t len, Station_t* stations) {
     while(from > -1 && buff[from--] != '\n') {} // rewind from to previous linefeed
     if(from < 5) {
         from = 0;
@@ -106,21 +90,29 @@ void readsegment(const char* buff, size_t from, size_t to, size_t len) {
     while(to < len && buff[to++] != '\n') {} // push to to last linefeed or EOF
     to--;
 
-    unsigned char station_name[16] = {0};
+    unsigned char station_name[32] = {0};
     unsigned char temp[8] = {0};
 
     while(from < to) {
         int w_i = 0;
         int station_length = 0;
+        unsigned hash = 146527;
         while(buff[from] != ';') {
             unsigned char c = (unsigned char) buff[from++];
             station_name[w_i++] = c;
+            hash = (hash * 33) ^ c;
         }
+
+        hash &= MASK;
 
         from++;
         station_length = w_i+1;
 
         w_i = 0;
+
+        // TODO: replace that (32%) by something smarter
+        // get rid of stack variable
+        // read data once
         while(buff[from] != '\n') {
             temp[w_i++] = buff[from++];
         }
@@ -128,20 +120,19 @@ void readsegment(const char* buff, size_t from, size_t to, size_t len) {
 
         float temperature = mystrtof(temp, tmp_length);
         // TODO: mutex
-        Station_t* station = station_find(station_name);
-        if(station == NULL) {
-            station_add((Station_t) {
-                .name = station_name,
-                .min = temperature,
-                .max = temperature,
-                .total = temperature,
-                .count = 1,
-            });
+        Station_t* station = &stations[hash];
+        if(station->name == NULL) {
+            station->name = malloc(station_length);
+            strcpy(station->name, station_name);
+            station->min = temperature;
+            station->max = temperature;
+            station->total = temperature;
+            station->count = 1;
         } else {
-            if(strcmp(station_name, station->name) != 0) {
-                printf("conflict : %s[%d] -- %s have same hash\n", station_name, station_length, station->name);
-                abort();
-            }
+            // if(strcmp(station_name, station->name) != 0) {
+            //     printf("conflict : %s -- %s have same hash\n", station_name, station->name);
+            //     abort();
+            // }
             if(temperature < station->min) {
                 station->min = temperature;
             }
@@ -188,16 +179,17 @@ int main(int argc, char *argv[]) {
 
     size_t step = len / processor_count;
 
-
+    Station_t* stations = (Station_t*) malloc(MAX_KEYS * sizeof(Station_t));
     for(int i = 0; i < processor_count; ++i) {
         size_t from = (size_t) (i * step);
         size_t to = from + step;
-        readsegment(buf, from, to, len);
+        printf("READ SEGMENT %d\n", i);
+        readsegment(buf, from, to, len, stations);
     }
 
     munmap(buf, len);
     close(fd);
-
+    free(stations);
     clock_gettime(CLOCK_MONOTONIC, &t1);
 
     double elapsed = (t1.tv_sec - t0.tv_sec) +
